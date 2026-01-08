@@ -501,17 +501,18 @@ impl SnapshotRequests {
         latest: &[T],
         vec_ids_starts_with: Vec<T>,
         vec_ids: Vec<T>,
-    ) -> Vec<T> {
+    ) -> Option<Vec<T>> {
         let mut snaps_ids = vec_ids.into_iter();
         let mut snaps_ids_start_with = vec_ids_starts_with.into_iter();
+
         self.requests
             .into_iter()
             .map(|r| match r {
-                SnapshotRequest::Latest(n) => latest[n].clone(),
-                SnapshotRequest::StartsWith(..) => snaps_ids_start_with.next().unwrap(),
-                SnapshotRequest::Id(..) => snaps_ids.next().unwrap(),
+                SnapshotRequest::Latest(n) => latest.get(n).cloned(),
+                SnapshotRequest::StartsWith(..) => snaps_ids_start_with.next(),
+                SnapshotRequest::Id(..) => snaps_ids.next(),
             })
-            .collect()
+        .collect()
     }
 }
 
@@ -691,7 +692,8 @@ impl SnapshotFile {
                 let ids: Vec<Id> = requests.ids.iter().map(|sn| **sn).collect();
                 let all_ids = requests.map_results(&[], ids_starts_with, ids);
 
-                Self::fill_missing(be, Vec::new(), all_ids.as_slice(), |_| true, p)
+                let flat_ids: Vec<Id> = all_ids.into_iter().flatten().collect();
+                Self::fill_missing(be, Vec::new(), flat_ids.as_slice(), |_| true, p)
             }
             Some(max_n) => {
                 let ids: BTreeMap<_, _> = requests
@@ -716,7 +718,14 @@ impl SnapshotFile {
                 });
                 let latest = Self::latest_n_from_iter(max_n, iter);
                 let vec_ids_starts_with = ids_starts_with.assert_found(&requests.starts_with)?;
-                Ok(requests.map_results(&latest, vec_ids_starts_with, vec_ids))
+
+                match requests.map_results(&latest, vec_ids_starts_with, vec_ids) {
+                    Some(s) => Ok(s),
+                    None => {
+                        eprintln!("Error: The repository is empty or no snapshots matching 'latest'.");
+                        return Ok(vec![]); // Or handle as an error
+                    }
+                }
             }
         }
     }
