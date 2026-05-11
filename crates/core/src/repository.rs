@@ -1752,11 +1752,14 @@ impl<S: IndexedFull> Repository<S> {
     /// # Errors
     ///
     /// * If the node is not a file.
-    ///  
+    ///
     /// # Note
     ///
     /// Currently, only regular file nodes are supported.
-    pub fn dump(&self, node: &Node, w: &mut impl Write) -> RusticResult<()> {
+    pub fn dump(&self, node: &Node, w: &mut impl Write) -> RusticResult<()>
+    where
+        S: Sync,
+    {
         commands::dump::dump(self, node, w)
     }
 

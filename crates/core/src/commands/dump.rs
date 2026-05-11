@@ -1,8 +1,10 @@
-use std::io::Write;
+use std::{io::Write, thread::scope};
+
+use pariter::IteratorExt;
 
 use crate::{
     backend::node::{Node, NodeType},
-    blob::{BlobId, BlobType},
+    blob::{BlobId, BlobType, DataId},
     error::{ErrorKind, RusticError, RusticResult},
     repository::{IndexedFull, Repository},
 };
@@ -11,7 +13,6 @@ use crate::{
 ///
 /// # Type Parameters
 ///
-/// * `P` - The progress bar type.
 /// * `S` - The type of the indexed tree.
 ///
 /// # Arguments
@@ -23,7 +24,9 @@ use crate::{
 /// # Errors
 ///
 /// * If the node is not a file.
-pub(crate) fn dump<S: IndexedFull>(
+/// * If a blob cannot be fetched from the backend.
+/// * If writing to `w` fails.
+pub(crate) fn dump<S: IndexedFull + Sync>(
     repo: &Repository<S>,
     node: &Node,
     w: &mut impl Write,
@@ -36,15 +39,42 @@ pub(crate) fn dump<S: IndexedFull>(
         .attach_context("node_type", node.node_type.to_string()));
     }
 
-    for id in node.content.as_ref().unwrap() {
+    let Some(content) = node.content.as_ref() else {
+        return Ok(());
+    };
+
+    // Single-blob files have nothing to overlap, so skip the worker setup.
+    if content.len() < 2 {
+        return dump_sequential(repo, content, w);
+    }
+
+    scope(|s| -> RusticResult<()> {
+        content
+            .iter()
+            .map(|id| BlobId::from(**id))
+            .parallel_map_scoped(s, |id| repo.get_blob_cached(&id, BlobType::Data))
+            .try_for_each(|res| write_blob(w, &res?))
+    })
+}
+
+fn dump_sequential<S: IndexedFull>(
+    repo: &Repository<S>,
+    content: &[DataId],
+    w: &mut impl Write,
+) -> RusticResult<()> {
+    for id in content {
         let data = repo.get_blob_cached(&BlobId::from(**id), BlobType::Data)?;
-        w.write_all(&data).map_err(|err| {
-            RusticError::with_source(
-                ErrorKind::InputOutput,
-                "Failed to write data to writer.",
-                err,
-            )
-        })?;
+        write_blob(w, &data)?;
     }
     Ok(())
+}
+
+fn write_blob(w: &mut impl Write, data: &[u8]) -> RusticResult<()> {
+    w.write_all(data).map_err(|err| {
+        RusticError::with_source(
+            ErrorKind::InputOutput,
+            "Failed to write data to writer.",
+            err,
+        )
+    })
 }
